@@ -50,10 +50,13 @@ jobs:
         env:
           VITE_GOOGLE_CLIENT_ID: ${{ secrets.VITE_GOOGLE_CLIENT_ID }}
         run: npm run dist:win
+      # Only distributable installers — not win-unpacked/ (would upload hundreds of loose files).
       - uses: actions/upload-artifact@v7
         with:
           name: windows-installer
-          path: release/
+          path: |
+            release/*.exe
+            release/*.yml
 
   build-mac:
     runs-on: macos-latest
@@ -73,7 +76,9 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: mac-installer
-          path: release/
+          path: |
+            release/*.dmg
+            release/*.yml
 
   build-linux:
     runs-on: ubuntu-latest
@@ -97,7 +102,10 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: linux-packages
-          path: release/
+          path: |
+            release/*.AppImage
+            release/*.deb
+            release/*.yml
 
   publish:
     needs: [build-win, build-mac, build-linux]
@@ -119,7 +127,10 @@ jobs:
           TAG="${RELEASE_TAG}"
           REPO="${GITHUB_REPOSITORY}"
           FILES=( )
-          while IFS= read -r -d '' f; do FILES+=( "$f" ); done < <(find artifacts -type f -print0)
+          while IFS= read -r -d '' f; do FILES+=( "$f" ); done < <(find artifacts -type f \( \
+            -iname '*.exe' -o -iname '*.dmg' -o -iname '*.appimage' -o -iname '*.deb' -o \
+            -iname '*.yml' -o -iname '*.yaml' -o -iname '*.blockmap' \
+          \) -print0)
           if [ "${#FILES[@]}" -eq 0 ]; then
             echo "No files under artifacts/"
             ls -laR artifacts || true

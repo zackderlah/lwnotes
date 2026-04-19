@@ -6,6 +6,18 @@ A small note-taking app built with Vite + React, packaged as a desktop applicati
 
 **Download installers (when published):** [Releases](https://github.com/zackderlah/lwnotes/releases)
 
+### Install from a release (easy path)
+
+Each release should list **a small set of downloads**. Use the **installer** for your OS and ignore stray internal files (e.g. `app.asar`, `.pak` files) if you see them on older releases—those were unpacked build outputs, not something you install by hand.
+
+| OS | Download | Install |
+|----|----------|---------|
+| **Windows** | `Note App Setup … .exe` (NSIS) | Run the `.exe` and follow the installer. |
+| **macOS** | `Note App … .dmg` | Open the `.dmg`, drag **Note App** into **Applications**. |
+| **Linux** | `.AppImage` (portable) or `.deb` (Debian/Ubuntu) | **AppImage:** `chmod +x` then run it, or use your AppImage launcher. **deb:** `sudo apt install ./path-to-your.deb` (or open with Software Install). |
+
+Optional small `latest*.yml` files are for auto-updaters, not for manual install.
+
 ## Prerequisites
 
 - Node.js 18+ and npm
