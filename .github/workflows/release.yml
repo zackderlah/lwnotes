@@ -2,8 +2,9 @@
 #
 # Usage:
 #   1. Set repository secret VITE_GOOGLE_CLIENT_ID (same Web client ID you use locally).
-#   2. git tag v1.0.0 && git push origin v1.0.0
-#   3. Open Actions → workflow run → Release appears with installers under Releases.
+#   2. Either push a tag: git tag v1.0.0 && git push origin v1.0.0
+#      OR: Actions → Release → Run workflow → enter an existing tag (e.g. v0.1.2).
+#   3. When the workflow finishes, installers appear under Releases.
 #
 # Code signing (optional): add Windows/macOS signing secrets later; see electron-builder docs.
 #
@@ -17,6 +18,12 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing git tag to build and publish (must exist on origin), e.g. v0.1.2'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -25,11 +32,15 @@ permissions:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
+# Tag ref for checkout: tag push uses the pushed ref; manual run uses the tag you type in the UI.
+# (github.ref_name is the branch name on workflow_dispatch, so we must not rely on it for manual runs.)
 jobs:
   build-win:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -48,6 +59,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -66,6 +79,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
       - name: Install Linux packaging deps
         run: |
           sudo apt-get update
@@ -97,10 +112,11 @@ jobs:
       - name: Create release and upload assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
         shell: bash
         run: |
           set -euo pipefail
-          TAG="${GITHUB_REF_NAME}"
+          TAG="${RELEASE_TAG}"
           REPO="${GITHUB_REPOSITORY}"
           FILES=( )
           while IFS= read -r -d '' f; do FILES+=( "$f" ); done < <(find artifacts -type f -print0)
