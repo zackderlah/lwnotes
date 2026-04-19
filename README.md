@@ -16,7 +16,7 @@ Each release should list **a small set of downloads**. Use the **installer** for
 | **macOS** | `Note App … .dmg` | Open the `.dmg`, drag **Note App** into **Applications**. |
 | **Linux** | `.AppImage` (portable) or `.deb` (Debian/Ubuntu) | **AppImage:** `chmod +x` then run it, or use your AppImage launcher. **deb:** `sudo apt install ./path-to-your.deb` (or open with Software Install). |
 
-Optional small `latest*.yml` files are for auto-updaters, not for manual install.
+Releases attach **installers only** (each OS’s `latest*.yml` / `builder-debug.yml` share the same filenames across platforms, which GitHub cannot host twice on one release).
 
 ## Prerequisites
 

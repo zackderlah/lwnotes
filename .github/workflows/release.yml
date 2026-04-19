@@ -51,12 +51,12 @@ jobs:
           VITE_GOOGLE_CLIENT_ID: ${{ secrets.VITE_GOOGLE_CLIENT_ID }}
         run: npm run dist:win
       # Only distributable installers — not win-unpacked/ (would upload hundreds of loose files).
+      # Do not upload release/*.yml here: every OS emits builder-debug.yml with the same name, and
+      # GitHub release assets must have unique basenames across the whole release.
       - uses: actions/upload-artifact@v7
         with:
           name: windows-installer
-          path: |
-            release/*.exe
-            release/*.yml
+          path: release/*.exe
 
   build-mac:
     runs-on: macos-latest
@@ -76,9 +76,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: mac-installer
-          path: |
-            release/*.dmg
-            release/*.yml
+          path: release/*.dmg
 
   build-linux:
     runs-on: ubuntu-latest
@@ -105,7 +103,6 @@ jobs:
           path: |
             release/*.AppImage
             release/*.deb
-            release/*.yml
 
   publish:
     needs: [build-win, build-mac, build-linux]
@@ -128,8 +125,7 @@ jobs:
           REPO="${GITHUB_REPOSITORY}"
           FILES=( )
           while IFS= read -r -d '' f; do FILES+=( "$f" ); done < <(find artifacts -type f \( \
-            -iname '*.exe' -o -iname '*.dmg' -o -iname '*.appimage' -o -iname '*.deb' -o \
-            -iname '*.yml' -o -iname '*.yaml' -o -iname '*.blockmap' \
+            -iname '*.exe' -o -iname '*.dmg' -o -iname '*.appimage' -o -iname '*.deb' \
           \) -print0)
           if [ "${#FILES[@]}" -eq 0 ]; then
             echo "No files under artifacts/"
