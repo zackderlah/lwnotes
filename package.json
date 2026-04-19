@@ -13,6 +13,7 @@
     "type": "git",
     "url": "git+https://github.com/zackderlah/lwnotes.git"
   },
+  "author": "zackderlah <zackderlah@users.noreply.github.com>",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
