@@ -83,11 +83,33 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-      - uses: softprops/action-gh-release@v2
-        with:
-          draft: false
-          generate_release_notes: true
-          files: |
-            artifacts/**/*
+      # GitHub sometimes returns HTTP 403 "secondary rate limit" on burst API use; retry with backoff.
+      - name: Create release and upload assets
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          REPO="${GITHUB_REPOSITORY}"
+          FILES=( )
+          while IFS= read -r -d '' f; do FILES+=( "$f" ); done < <(find artifacts -type f -print0)
+          if [ "${#FILES[@]}" -eq 0 ]; then
+            echo "No files under artifacts/"
+            ls -laR artifacts || true
+            exit 1
+          fi
+          for attempt in 1 2 3 4 5 6; do
+            if gh release view "$TAG" --repo "$REPO" &>/dev/null; then
+              echo "Release $TAG exists; uploading/updating assets..."
+              gh release upload "$TAG" "${FILES[@]}" --repo "$REPO" --clobber
+              exit 0
+            fi
+            if gh release create "$TAG" "${FILES[@]}" --repo "$REPO" --title "$TAG" --generate-notes --verify-tag; then
+              exit 0
+            fi
+            echo "::warning::Attempt $attempt failed (often a secondary rate limit). Sleeping 60s..."
+            sleep 60
+          done
+          echo "::error::Release step failed after retries."
+          exit 1
