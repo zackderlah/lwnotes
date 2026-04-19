@@ -57,8 +57,17 @@ function friendlyDriveError(msg) {
   ) {
     return 'Enable the Google Drive API for this project: Google Cloud Console → APIs & Services → Library → search “Google Drive API” → Enable. Wait 1–2 minutes, then click Sync now again.'
   }
+  if (/insufficient authentication scopes|ACCESS_TOKEN_SCOPE_INSUFFICIENT/i.test(m)) {
+    return 'This Google client is missing Drive access. Use a Web OAuth client with scope drive.file, disconnect, and connect again.'
+  }
+  if (/Must specify two fields|fieldMask|files\.list/i.test(m)) {
+    return m
+  }
   return m
 }
+
+/** Serialize syncs — overlapping runs corrupt local file-id cache and can leave the UI stuck on “Syncing…”. */
+let syncChain = Promise.resolve()
 
 async function ensureRootFolder(accessToken) {
   const esc = ROOT_NAME.replace(/'/g, "\\'")
@@ -76,6 +85,12 @@ async function ensureRootFolder(accessToken) {
  * Removes Drive files that are no longer in the manifest.
  */
 export async function syncLibraryToGoogleDrive(state) {
+  const p = syncChain.then(() => syncLibraryToGoogleDriveImpl(state))
+  syncChain = p.catch(() => {})
+  return p
+}
+
+async function syncLibraryToGoogleDriveImpl(state) {
   let accessToken
   try {
     accessToken = await getGoogleAccessTokenForSync()

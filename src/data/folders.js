@@ -1,4 +1,5 @@
 import { htmlToPlainText } from '../noteHtml.js'
+import { DEFAULT_NOTE_FOLDER_ID } from './notes.js'
 
 /** Virtual folder id: every note in the tab. */
 export const ALL_FOLDER_ID = 'all'
@@ -37,6 +38,27 @@ export function filterNotesByFolder(notes, folderId) {
   if (!notes?.length) return []
   if (folderId === ALL_FOLDER_ID) return notes
   return notes.filter((n) => (n.folderId ?? 'personal') === folderId)
+}
+
+/** Normalize sidebar folder selection to a non-empty id array (supports legacy single-id state). */
+export function normalizeFolderSelection(raw) {
+  if (raw == null) return [ALL_FOLDER_ID]
+  if (Array.isArray(raw)) {
+    return raw.length ? raw : [ALL_FOLDER_ID]
+  }
+  return [raw]
+}
+
+/**
+ * Notes visible when one or more folders are selected (union). If `all` is included, every note is included.
+ */
+export function filterNotesByFolders(notes, folderIds) {
+  if (!notes?.length) return []
+  const ids = normalizeFolderSelection(folderIds)
+  if (ids.includes(ALL_FOLDER_ID)) return notes
+  if (ids.length === 1) return filterNotesByFolder(notes, ids[0])
+  const set = new Set(ids)
+  return notes.filter((n) => set.has(n.folderId ?? DEFAULT_NOTE_FOLDER_ID))
 }
 
 export function filterNotesBySearch(notes, rawQuery) {

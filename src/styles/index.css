@@ -192,6 +192,20 @@ html[data-theme='gruvbox'] select option {
   color: var(--text-main);
 }
 
+/* Native <select> in browser/Electron: match panel colors for light themes too */
+html[data-theme='high-contrast'] select,
+html[data-theme='drab-archive'] select {
+  background-color: var(--bg-canvas);
+  color: var(--text-main);
+  border-color: var(--border-color);
+}
+
+html[data-theme='high-contrast'] select option,
+html[data-theme='drab-archive'] select option {
+  background-color: var(--bg-canvas);
+  color: var(--text-main);
+}
+
 * {
   box-sizing: border-box;
   margin: 0;
@@ -374,6 +388,15 @@ html[data-theme='gruvbox'] .tab.active {
   display: flex;
   overflow: hidden;
   box-shadow: var(--app-body-shadow);
+}
+
+/* Lazy-loaded Archive / Preferences: same canvas bg, no layout shift */
+.app-view-suspense-fallback {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  align-self: stretch;
+  background-color: var(--bg-canvas);
 }
 
 html[data-theme='gruvbox'] .app-body {

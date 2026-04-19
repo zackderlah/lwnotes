@@ -53,8 +53,19 @@ function createWindow() {
     mainWindow.show()
   })
 
+  // Google Identity Services opens OAuth in window.open() — must stay in-app so GIS can
+  // postMessage back. Sending every popup to the default browser breaks sign-in (stuck loading).
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url)
+    const u = String(url || '')
+    if (
+      u === 'about:blank' ||
+      u.startsWith('https://accounts.google.com') ||
+      u.startsWith('https://oauth2.googleapis.com') ||
+      u.startsWith('https://accounts.youtube.com')
+    ) {
+      return { action: 'allow' }
+    }
+    shell.openExternal(u)
     return { action: 'deny' }
   })
 

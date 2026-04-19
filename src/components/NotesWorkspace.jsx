@@ -5,15 +5,18 @@ export default function NotesWorkspace({
   folders,
   notes,
   visibleNotes,
-  selectedFolderId,
+  selectedFolderIds,
   onSelectFolder,
   onCreateFolder,
   onRenameFolder,
   onReorderFolders,
   onDeleteFolder,
+  onAbandonNewFolder,
+  pendingAutoEditFolderId,
+  onConsumePendingAutoEdit,
   searchQuery,
   onSearchChange,
-  selectedNoteId,
+  selectedNoteIds,
   onSelectNote,
   onAddNote,
   onDeleteNote,
@@ -33,12 +36,15 @@ export default function NotesWorkspace({
       <FolderRail
         folders={folders}
         notes={notes}
-        selectedFolderId={selectedFolderId}
+        selectedFolderIds={selectedFolderIds}
         onSelectFolder={onSelectFolder}
         onCreateFolder={onCreateFolder}
         onRenameFolder={onRenameFolder}
         onReorderFolders={onReorderFolders}
         onDeleteFolder={onDeleteFolder}
+        onAbandonNewFolder={onAbandonNewFolder}
+        pendingAutoEditFolderId={pendingAutoEditFolderId}
+        onConsumePendingAutoEdit={onConsumePendingAutoEdit}
         onShowContextMenu={onShowContextMenu}
       />
       <div className="note-list-panel">
@@ -92,7 +98,7 @@ export default function NotesWorkspace({
         <NoteList
           notes={visibleNotes}
           emptyHint={emptyHint}
-          selectedNoteId={selectedNoteId}
+          selectedNoteIds={selectedNoteIds}
           onSelectNote={onSelectNote}
           onAddNote={onAddNote}
           onDeleteNote={onDeleteNote}

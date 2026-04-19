@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import ShortcutsSettings from './ShortcutsSettings.jsx'
+import { THEMES, THEME_OPTION_LABELS } from '../theme.js'
 
 const SECTION_IDS = [
   'prefs-account',
@@ -155,12 +156,13 @@ export default function PreferencesView({
               className="select-field"
               value={theme}
               onChange={(e) => onThemeChange(e.target.value)}
+              aria-label="Interface theme"
             >
-              <option value="warm-grey">Warm Grey (Default)</option>
-              <option value="high-contrast">High Contrast Ink</option>
-              <option value="drab-archive">Drab Archive</option>
-              <option value="deep-sea">Deep Sea (Focus)</option>
-              <option value="gruvbox">Gruvbox</option>
+              {THEMES.map((id) => (
+                <option key={id} value={id}>
+                  {THEME_OPTION_LABELS[id]}
+                </option>
+              ))}
             </select>
           </div>
           <div className="setting-row">
@@ -281,13 +283,36 @@ export default function PreferencesView({
               </div>
             </div>
             {googleClientIdConfigured && (
+              <p className="prefs-google-browser-hint prefs-google-where-drive">
+                <strong>Where files go:</strong> open{' '}
+                <a
+                  href="https://drive.google.com/drive/my-drive"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Google Drive
+                </a>{' '}
+                → <strong>My Drive</strong> → folder <strong>Note App</strong> (created on
+                first successful sync). Shared drives are not used. Use the same Google
+                account you clicked at sign-in.
+              </p>
+            )}
+            {googleClientIdConfigured && (
               <p className="prefs-google-browser-hint">
                 {desktopOauthOrigin ? (
                   <>
+                    Use a <strong>Web application</strong> OAuth client (not Desktop).
                     The desktop app loads from{' '}
-                    <code className="prefs-inline-code">{desktopOauthOrigin}</code> — that
-                    exact origin must be listed in your OAuth client. If sign-in hangs,
-                    allow popups and third-party cookies for Google.
+                    <code className="prefs-inline-code">{desktopOauthOrigin}</code> — add
+                    that <strong>exact</strong> URL under <strong>Authorized JavaScript
+                    origins</strong> in Google Cloud (
+                    <code className="prefs-inline-code">127.0.0.1</code> and{' '}
+                    <code className="prefs-inline-code">localhost</code> are different
+                    origins — register the one the app uses). If you see <strong>redirect_uri_mismatch</strong>, the origin is
+                    missing or mistyped; you can also add{' '}
+                    <code className="prefs-inline-code">{desktopOauthOrigin}/</code> under{' '}
+                    <strong>Authorized redirect URIs</strong>. Allow popups and
+                    third-party cookies for Google.
                   </>
                 ) : (
                   <>

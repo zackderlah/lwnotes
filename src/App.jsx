@@ -1,10 +1,19 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import Tabs from './components/Tabs.jsx'
 import NotesWorkspace from './components/NotesWorkspace.jsx'
 import Editor from './components/Editor.jsx'
-import ArchiveView from './components/ArchiveView.jsx'
-import PreferencesView from './components/PreferencesView.jsx'
 import ContextMenu from './components/ContextMenu.jsx'
+
+const ArchiveView = lazy(() => import('./components/ArchiveView.jsx'))
+const PreferencesView = lazy(() => import('./components/PreferencesView.jsx'))
 import { useHistoryState } from './hooks/useHistoryState.js'
 import {
   CORE_TAB_IDS,
@@ -18,9 +27,10 @@ import {
 } from './data/notes.js'
 import {
   ALL_FOLDER_ID,
-  filterNotesByFolder,
+  filterNotesByFolders,
   filterNotesBySearch,
   isFolderLabelTaken,
+  normalizeFolderSelection,
   reorderLibraryFolders,
 } from './data/folders.js'
 import { DEFAULT_APP_STATE, normalizeLibrarySnapshot } from './libraryState.js'
@@ -70,6 +80,21 @@ import {
   mergeObsidianImportIntoState,
   parseObsidianVaultFiles,
 } from './importObsidian.js'
+import { useMediaQuery } from './hooks/useMediaQuery.js'
+import MobileNotesHome from './components/mobile/MobileNotesHome.jsx'
+import MobileBottomNav from './components/mobile/MobileBottomNav.jsx'
+import MobileEditorScreen from './components/mobile/MobileEditorScreen.jsx'
+import MobilePreferencesView from './components/mobile/MobilePreferencesView.jsx'
+import {
+  hapticOpenSheet,
+  hapticTab,
+} from './mobileHaptics.js'
+import './styles/mobile.css'
+
+/** Library + editor surface (any note tab, including extra workspace tabs — not Archive/Settings). */
+function isWorkspaceNotesTab(tabId) {
+  return tabId !== 'archive' && tabId !== 'preferences'
+}
 
 export default function App() {
   const { state, commit, undo, redo } = useHistoryState(DEFAULT_APP_STATE)
@@ -84,16 +109,23 @@ export default function App() {
   const [compactSidebar, setCompactSidebar] = useState(readStoredCompactSidebar)
 
   const [folderByTab, setFolderByTab] = useState(() => ({
-    notes: ALL_FOLDER_ID,
+    notes: [ALL_FOLDER_ID],
   }))
   const [searchByTab, setSearchByTab] = useState(() => ({
     notes: '',
   }))
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false)
+  const [pendingAutoEditFolderId, setPendingAutoEditFolderId] = useState(null)
+  const [noteMultiByTab, setNoteMultiByTab] = useState(() => ({}))
   const [shortcutBindings, setShortcutBindings] = useState(
     readStoredShortcutBindings,
   )
   const notesSearchInputRef = useRef(null)
+  const folderAnchorRef = useRef(ALL_FOLDER_ID)
+  const noteAnchorRef = useRef(null)
+
+  const isMobile = useMediaQuery('(max-width: 768px)')
+  const [mobileEditorOpen, setMobileEditorOpen] = useState(false)
 
   const [cloudSyncEnabled, setCloudSyncEnabled] = useState(
     readStoredCloudSyncEnabled,
@@ -336,14 +368,34 @@ export default function App() {
 
   const libraryFolders = libraryFoldersByTab?.[activeTabId] ?? []
 
-  const selectedFolderId = folderByTab[activeTabId] ?? ALL_FOLDER_ID
+  const selectedFolderIds = useMemo(
+    () => normalizeFolderSelection(folderByTab[activeTabId]),
+    [folderByTab, activeTabId],
+  )
   const notesSearchQuery = searchByTab.notes ?? ''
 
   const visibleNotes = useMemo(() => {
     if (activeTabId === 'archive' || activeTabId === 'preferences') return []
-    const byFolder = filterNotesByFolder(notes, selectedFolderId)
+    const byFolder = filterNotesByFolders(notes, selectedFolderIds)
     return filterNotesBySearch(byFolder, notesSearchQuery)
-  }, [activeTabId, notes, selectedFolderId, notesSearchQuery])
+  }, [activeTabId, notes, selectedFolderIds, notesSearchQuery])
+
+  const noteMultiIds = noteMultiByTab[activeTabId]
+  const selectedNoteIds = useMemo(() => {
+    if (noteMultiIds?.length) return noteMultiIds
+    if (selectedNoteId) return [selectedNoteId]
+    return []
+  }, [noteMultiIds, selectedNoteId])
+
+  const mobileHeaderTitle = useMemo(() => {
+    const ids = selectedFolderIds
+    if (ids.length === 1 && ids[0] === ALL_FOLDER_ID) return 'All Notes'
+    if (ids.length === 1) {
+      const f = libraryFolders.find((x) => x.id === ids[0])
+      return (f?.label ?? '').trim() || 'Notes'
+    }
+    return 'Notes'
+  }, [selectedFolderIds, libraryFolders])
 
   const globalSearchResults = useMemo(() => {
     const list = notesByTab.notes ?? []
@@ -358,7 +410,22 @@ export default function App() {
   useEffect(() => {
     if (activeTabId === 'archive' || activeTabId === 'preferences') return
     const ids = new Set(visibleNotes.map((n) => n.id))
+    const multi = noteMultiByTab[activeTabId]
+    if (multi?.length) {
+      const filtered = multi.filter((nid) => ids.has(nid))
+      if (filtered.length !== multi.length) {
+        setNoteMultiByTab((prev) => {
+          const { [activeTabId]: _, ...rest } = prev
+          if (filtered.length > 1) return { ...rest, [activeTabId]: filtered }
+          return rest
+        })
+      }
+    }
     if (selectedNoteId != null && !ids.has(selectedNoteId)) {
+      setNoteMultiByTab((prev) => {
+        const { [activeTabId]: _, ...rest } = prev
+        return rest
+      })
       commit(
         (prev) => ({
           ...prev,
@@ -370,15 +437,19 @@ export default function App() {
         { recordHistory: false },
       )
     }
-  }, [activeTabId, visibleNotes, selectedNoteId, commit])
+  }, [activeTabId, visibleNotes, selectedNoteId, commit, noteMultiByTab])
 
   useEffect(() => {
-    if (activeTabId !== 'notes') return
-    const ids = new Set(libraryFolders.map((f) => f.id))
-    if (!ids.has(selectedFolderId)) {
-      setFolderByTab((prev) => ({ ...prev, [activeTabId]: ALL_FOLDER_ID }))
-    }
-  }, [activeTabId, libraryFolders, selectedFolderId])
+    if (!isWorkspaceNotesTab(activeTabId)) return
+    const validIds = new Set(libraryFolders.map((f) => f.id))
+    const cur = normalizeFolderSelection(folderByTab[activeTabId])
+    const filtered = cur.filter((id) => validIds.has(id))
+    const next = filtered.length ? filtered : [ALL_FOLDER_ID]
+    const unchanged =
+      next.length === cur.length && next.every((id, i) => id === cur[i])
+    if (unchanged) return
+    setFolderByTab((prev) => ({ ...prev, [activeTabId]: next }))
+  }, [activeTabId, libraryFolders, folderByTab[activeTabId]])
 
   const handleChangeTitle = (title) => {
     if (!selectedNoteId) return
@@ -442,54 +513,68 @@ export default function App() {
     }))
   }
 
-  const handleDeleteNote = useCallback(
-    (id) => {
-    const targetTabId = activeTabId
-    if (targetTabId === 'archive' || targetTabId === 'preferences') return
+  const handleDeleteNotes = useCallback(
+    (rawIds) => {
+      const ids = [...new Set(rawIds)].filter(Boolean)
+      if (!ids.length) return
+      const targetTabId = activeTabId
+      if (targetTabId === 'archive' || targetTabId === 'preferences') return
 
-    commit((prev) => {
-      const list = prev.notesByTab[targetTabId] ?? []
-      const note = list.find((n) => n.id === id)
-      if (!note) return prev
+      commit((prev) => {
+        const list = prev.notesByTab[targetTabId] ?? []
+        const idSet = new Set(ids)
+        const removedRows = list.filter((n) => idSet.has(n.id))
+        if (removedRows.length === 0) return prev
 
-      const deletedAt = Date.now()
-      const archived = {
-        id: note.id,
-        deletedAt,
-        deletedLabel: formatDeletedLabel(deletedAt),
-        archiveKind: ARCHIVE_KIND_NOTE,
-        sourceTabId: targetTabId,
-        title: note.title,
-        preview: note.preview ?? '',
-        body: note.body ?? '',
-        images: note.images ?? [],
-      }
+        let nextArchive = prev.notesByTab.archive ?? []
+        const deletedAt = Date.now()
+        for (const note of removedRows) {
+          if (!noteHasArchivableContent(note)) continue
+          const archived = {
+            id: note.id,
+            deletedAt,
+            deletedLabel: formatDeletedLabel(deletedAt),
+            archiveKind: ARCHIVE_KIND_NOTE,
+            sourceTabId: targetTabId,
+            title: note.title,
+            preview: note.preview ?? '',
+            body: note.body ?? '',
+            images: note.images ?? [],
+          }
+          nextArchive = [archived, ...nextArchive]
+        }
 
-      const remaining = list.filter((n) => n.id !== id)
-      const currentlySelected = prev.selectedByTab[targetTabId]
-      const nextSelected =
-        currentlySelected === id ? remaining[0]?.id ?? null : currentlySelected
+        const remaining = list.filter((n) => !idSet.has(n.id))
+        const currentlySelected = prev.selectedByTab[targetTabId]
+        const nextSelected = idSet.has(currentlySelected)
+          ? remaining[0]?.id ?? null
+          : currentlySelected
 
-      const prevArchive = prev.notesByTab.archive ?? []
-      const nextArchive = noteHasArchivableContent(note)
-        ? [archived, ...prevArchive]
-        : prevArchive
+        return {
+          ...prev,
+          notesByTab: {
+            ...prev.notesByTab,
+            [targetTabId]: remaining,
+            archive: nextArchive,
+          },
+          selectedByTab: {
+            ...prev.selectedByTab,
+            [targetTabId]: nextSelected,
+          },
+        }
+      })
 
-      return {
-        ...prev,
-        notesByTab: {
-          ...prev.notesByTab,
-          [targetTabId]: remaining,
-          archive: nextArchive,
-        },
-        selectedByTab: {
-          ...prev.selectedByTab,
-          [targetTabId]: nextSelected,
-        },
-      }
-    })
-  },
+      setNoteMultiByTab((prev) => {
+        const { [targetTabId]: _, ...rest } = prev
+        return rest
+      })
+    },
     [activeTabId, commit],
+  )
+
+  const handleDeleteNote = useCallback(
+    (id) => handleDeleteNotes([id]),
+    [handleDeleteNotes],
   )
 
   const handleAddNote = () => {
@@ -497,10 +582,12 @@ export default function App() {
     const id = `note-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
     const targetTabId = activeTabId
 
-    const folderId =
-      (folderByTab[activeTabId] ?? ALL_FOLDER_ID) === ALL_FOLDER_ID
-        ? DEFAULT_NOTE_FOLDER_ID
-        : folderByTab[activeTabId]
+    const sel = normalizeFolderSelection(folderByTab[activeTabId])
+    let folderId = DEFAULT_NOTE_FOLDER_ID
+    if (!sel.includes(ALL_FOLDER_ID)) {
+      const concrete = sel.find((fid) => fid !== ALL_FOLDER_ID)
+      folderId = concrete ?? DEFAULT_NOTE_FOLDER_ID
+    }
     const newNote = {
       id,
       folderId,
@@ -520,22 +607,139 @@ export default function App() {
     }))
   }
 
-  const handleSelectNote = (id) => {
-    const targetTabId = activeTabId
-    commit(
-      (prev) => ({
-        ...prev,
-        selectedByTab: { ...prev.selectedByTab, [targetTabId]: id },
-      }),
-      { recordHistory: false },
-    )
-  }
+  const handleSelectNote = useCallback(
+    (id, e) => {
+      const targetTabId = activeTabId
+      const hasModifiers = e && 'shiftKey' in e
+      const shift = hasModifiers ? e.shiftKey : false
+      const alt = hasModifiers ? e.altKey : false
+
+      if (shift) {
+        const anchor = noteAnchorRef.current ?? selectedNoteId ?? id
+        const list = visibleNotes
+        const ia = list.findIndex((n) => n.id === anchor)
+        const ib = list.findIndex((n) => n.id === id)
+        if (ia < 0 || ib < 0) {
+          setNoteMultiByTab((prev) => {
+            const { [targetTabId]: _, ...rest } = prev
+            return rest
+          })
+          commit(
+            (prev) => ({
+              ...prev,
+              selectedByTab: { ...prev.selectedByTab, [targetTabId]: id },
+            }),
+            { recordHistory: false },
+          )
+          noteAnchorRef.current = id
+          return
+        }
+        const start = Math.min(ia, ib)
+        const end = Math.max(ia, ib)
+        const range = list.slice(start, end + 1).map((n) => n.id)
+        setNoteMultiByTab((prev) => ({ ...prev, [targetTabId]: range }))
+        commit(
+          (prev) => ({
+            ...prev,
+            selectedByTab: { ...prev.selectedByTab, [targetTabId]: id },
+          }),
+          { recordHistory: false },
+        )
+        noteAnchorRef.current = id
+        return
+      }
+
+      if (alt) {
+        const cur =
+          noteMultiByTab[targetTabId] ??
+          (selectedNoteId ? [selectedNoteId] : [])
+        let next
+        if (cur.includes(id)) {
+          next = cur.filter((x) => x !== id)
+        } else {
+          next = [...cur, id]
+        }
+        if (next.length === 0) {
+          setNoteMultiByTab((prev) => {
+            const { [targetTabId]: _, ...rest } = prev
+            return rest
+          })
+          commit(
+            (prev) => ({
+              ...prev,
+              selectedByTab: { ...prev.selectedByTab, [targetTabId]: null },
+            }),
+            { recordHistory: false },
+          )
+          noteAnchorRef.current = id
+          return
+        }
+        if (next.length === 1) {
+          setNoteMultiByTab((prev) => {
+            const { [targetTabId]: _, ...rest } = prev
+            return rest
+          })
+          commit(
+            (prev) => ({
+              ...prev,
+              selectedByTab: {
+                ...prev.selectedByTab,
+                [targetTabId]: next[0],
+              },
+            }),
+            { recordHistory: false },
+          )
+        } else {
+          setNoteMultiByTab((prev) => ({ ...prev, [targetTabId]: next }))
+          commit(
+            (prev) => ({
+              ...prev,
+              selectedByTab: { ...prev.selectedByTab, [targetTabId]: id },
+            }),
+            { recordHistory: false },
+          )
+        }
+        noteAnchorRef.current = id
+        return
+      }
+
+      setNoteMultiByTab((prev) => {
+        const { [targetTabId]: _, ...rest } = prev
+        return rest
+      })
+      commit(
+        (prev) => ({
+          ...prev,
+          selectedByTab: { ...prev.selectedByTab, [targetTabId]: id },
+        }),
+        { recordHistory: false },
+      )
+      noteAnchorRef.current = id
+    },
+    [activeTabId, commit, visibleNotes, selectedNoteId, noteMultiByTab],
+  )
 
   const handleSwitchTab = (id) => {
     commit((prev) => ({ ...prev, activeTabId: id }), {
       recordHistory: false,
     })
   }
+
+  const openMobileEditor = useCallback(() => {
+    hapticOpenSheet()
+    setMobileEditorOpen(true)
+  }, [])
+
+  const handleMobileNavigate = useCallback(
+    (targetId) => {
+      if (targetId !== activeTabId) hapticTab()
+      setMobileEditorOpen(false)
+      commit((prev) => ({ ...prev, activeTabId: targetId }), {
+        recordHistory: false,
+      })
+    },
+    [activeTabId, commit],
+  )
 
   const handleSetTabColor = (id, color) => {
     commit((prev) => ({
@@ -611,6 +815,10 @@ export default function App() {
         notesByTab: { ...prev.notesByTab, [targetTabId]: nextNotes },
         selectedByTab: { ...prev.selectedByTab, [targetTabId]: newId },
       }
+    })
+    setNoteMultiByTab((prev) => {
+      const { [targetTabId]: _, ...rest } = prev
+      return rest
     })
   }
 
@@ -795,16 +1003,12 @@ export default function App() {
     [commit],
   )
 
+  const handleConsumePendingAutoEdit = useCallback(() => {
+    setPendingAutoEditFolderId(null)
+  }, [])
+
   const handleCreateFolder = useCallback(() => {
-    if (activeTabId !== 'notes') return
-    const name = window.prompt('New folder name', 'New Folder')
-    const trimmed = name?.trim()
-    if (!trimmed) return
-    const list = libraryFoldersByTab?.[activeTabId] ?? []
-    if (isFolderLabelTaken(list, trimmed)) {
-      window.alert('A folder with that name already exists.')
-      return
-    }
+    if (!isWorkspaceNotesTab(activeTabId)) return
     const newId = `fld-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
     commit((prev) => ({
       ...prev,
@@ -812,16 +1016,107 @@ export default function App() {
         ...prev.libraryFoldersByTab,
         [activeTabId]: [
           ...(prev.libraryFoldersByTab[activeTabId] ?? []),
-          { id: newId, label: trimmed },
+          { id: newId, label: '' },
         ],
       },
     }))
-  }, [activeTabId, commit, libraryFoldersByTab])
+    setFolderByTab((prev) => ({ ...prev, [activeTabId]: [newId] }))
+    folderAnchorRef.current = newId
+    setPendingAutoEditFolderId(newId)
+  }, [activeTabId, commit])
+
+  const handleCreateFolderWithName = useCallback(
+    (trimmed) => {
+      const label = trimmed?.trim()
+      if (!label) return
+      if (!isWorkspaceNotesTab(activeTabId)) return
+      const list = libraryFoldersByTab?.[activeTabId] ?? []
+      if (isFolderLabelTaken(list, label)) {
+        window.alert('A folder with that name already exists.')
+        return
+      }
+      const newId = `fld-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+      commit((prev) => ({
+        ...prev,
+        libraryFoldersByTab: {
+          ...prev.libraryFoldersByTab,
+          [activeTabId]: [
+            ...(prev.libraryFoldersByTab[activeTabId] ?? []),
+            { id: newId, label },
+          ],
+        },
+      }))
+      setFolderByTab((prev) => ({ ...prev, [activeTabId]: [newId] }))
+      folderAnchorRef.current = newId
+    },
+    [activeTabId, commit, libraryFoldersByTab],
+  )
+
+  const handleAbandonNewFolder = useCallback(
+    (folderId) => {
+      if (folderId === ALL_FOLDER_ID) return
+      if (!isWorkspaceNotesTab(activeTabId)) return
+      const folder = libraryFolders.find((f) => f.id === folderId)
+      if (!folder || folder.label.trim() !== '') return
+
+      const tabId = activeTabId
+      commit((prev) => {
+        const folders = (prev.libraryFoldersByTab[tabId] ?? []).filter(
+          (f) => f.id !== folderId,
+        )
+        const list = prev.notesByTab[tabId] ?? []
+        const hadArchivableInFolder = list.some(
+          (n) => n.folderId === folderId && noteHasArchivableContent(n),
+        )
+        const notes = list.map((n) =>
+          n.folderId === folderId
+            ? { ...n, folderId: DEFAULT_NOTE_FOLDER_ID }
+            : n,
+        )
+        const prevArchive = prev.notesByTab.archive ?? []
+        let nextArchive = prevArchive
+        if (hadArchivableInFolder) {
+          const deletedAt = Date.now()
+          const archivedFolder = {
+            id: `arch-folder-${folderId}-${deletedAt}`,
+            deletedAt,
+            deletedLabel: formatDeletedLabel(deletedAt),
+            archiveKind: ARCHIVE_KIND_FOLDER,
+            sourceTabId: tabId,
+            restoredFolderId: folderId,
+            title: folder.label || 'Folder',
+            preview: 'Folder',
+            body: '',
+          }
+          nextArchive = [archivedFolder, ...prevArchive]
+        }
+        return {
+          ...prev,
+          libraryFoldersByTab: {
+            ...prev.libraryFoldersByTab,
+            [tabId]: folders,
+          },
+          notesByTab: {
+            ...prev.notesByTab,
+            [tabId]: notes,
+            archive: nextArchive,
+          },
+        }
+      })
+      setFolderByTab((prev) => {
+        const cur = normalizeFolderSelection(prev[tabId])
+        const next = cur.filter((fid) => fid !== folderId)
+        return { ...prev, [tabId]: next.length ? next : [ALL_FOLDER_ID] }
+      })
+      setPendingAutoEditFolderId((p) => (p === folderId ? null : p))
+    },
+    [activeTabId, commit, libraryFolders],
+  )
 
   const handleRenameFolder = useCallback(
     (folderId, newLabel) => {
       if (folderId === ALL_FOLDER_ID) return
-      if (activeTabId !== 'notes') return
+      if (!isWorkspaceNotesTab(activeTabId)) return
       const trimmed = newLabel?.trim()
       if (!trimmed) return
       commit((prev) => {
@@ -846,7 +1141,7 @@ export default function App() {
 
   const handleReorderFolders = useCallback(
     (activeId, overId, position = 'before') => {
-      if (activeTabId !== 'notes') return
+      if (!isWorkspaceNotesTab(activeTabId)) return
       commit((prev) => {
         const list = prev.libraryFoldersByTab[activeTabId] ?? []
         const next = reorderLibraryFolders(list, activeId, overId, position)
@@ -866,7 +1161,7 @@ export default function App() {
   const handleDeleteFolder = useCallback(
     (folderId) => {
       if (folderId === ALL_FOLDER_ID) return
-      if (activeTabId !== 'notes') return
+      if (!isWorkspaceNotesTab(activeTabId)) return
       const folder = libraryFolders.find((f) => f.id === folderId)
       if (!folder) return
       if (
@@ -921,18 +1216,62 @@ export default function App() {
           },
         }
       })
-      setFolderByTab((prev) =>
-        prev[tabId] === folderId
-          ? { ...prev, [tabId]: ALL_FOLDER_ID }
-          : prev,
-      )
+      setFolderByTab((prev) => {
+        const cur = normalizeFolderSelection(prev[tabId])
+        if (!cur.includes(folderId)) return prev
+        const next = cur.filter((id) => id !== folderId)
+        return { ...prev, [tabId]: next.length ? next : [ALL_FOLDER_ID] }
+      })
     },
     [activeTabId, commit, libraryFolders],
   )
 
-  const handleSelectFolder = (folderId) => {
-    setFolderByTab((prev) => ({ ...prev, [activeTabId]: folderId }))
-  }
+  const handleSelectFolder = useCallback(
+    (folderId, e) => {
+      const tab = activeTabId
+      const order = libraryFolders.map((f) => f.id)
+
+      const hasModifiers = e && 'shiftKey' in e
+      const shift = hasModifiers ? e.shiftKey : false
+      const alt = hasModifiers ? e.altKey : false
+
+      if (shift) {
+        const anchor = folderAnchorRef.current ?? ALL_FOLDER_ID
+        const ia = order.indexOf(anchor)
+        const ib = order.indexOf(folderId)
+        if (ia < 0 || ib < 0) {
+          setFolderByTab((prev) => ({ ...prev, [tab]: [folderId] }))
+          folderAnchorRef.current = folderId
+          return
+        }
+        const start = Math.min(ia, ib)
+        const end = Math.max(ia, ib)
+        const rangeIds = order.slice(start, end + 1)
+        setFolderByTab((prev) => ({ ...prev, [tab]: rangeIds }))
+        return
+      }
+
+      if (alt) {
+        setFolderByTab((prev) => {
+          const cur = normalizeFolderSelection(prev[tab])
+          let next = [...cur]
+          if (next.includes(folderId)) {
+            next = next.filter((id) => id !== folderId)
+            if (next.length === 0) next = [ALL_FOLDER_ID]
+          } else {
+            next = [...next, folderId]
+          }
+          return { ...prev, [tab]: next }
+        })
+        folderAnchorRef.current = folderId
+        return
+      }
+
+      setFolderByTab((prev) => ({ ...prev, [tab]: [folderId] }))
+      folderAnchorRef.current = folderId
+    },
+    [activeTabId, libraryFolders],
+  )
 
   const handleNotesSearchChange = (q) => {
     setSearchByTab((prev) => ({ ...prev, notes: q }))
@@ -952,7 +1291,11 @@ export default function App() {
         { recordHistory: false },
       )
       const fid = note?.folderId ?? DEFAULT_NOTE_FOLDER_ID
-      setFolderByTab((prev) => ({ ...prev, notes: fid }))
+      setFolderByTab((prev) => ({ ...prev, notes: [fid] }))
+      setNoteMultiByTab((prev) => {
+        const { notes: _, ...rest } = prev
+        return rest
+      })
     },
     [notesByTab.notes, commit],
   )
@@ -997,7 +1340,7 @@ export default function App() {
           setGlobalSearchOpen(false)
           return
         }
-        if (activeTabId === 'notes') {
+        if (isWorkspaceNotesTab(activeTabId)) {
           const el = notesSearchInputRef.current
           el?.focus()
           el?.select()
@@ -1023,13 +1366,11 @@ export default function App() {
 
       if (action === 'toggleArchive') {
         e.preventDefault()
-        if (
-          activeTabId !== 'archive' &&
-          activeTabId !== 'preferences' &&
-          selectedNoteId
-        ) {
-          handleDeleteNote(selectedNoteId)
-        }
+        if (activeTabId === 'archive' || activeTabId === 'preferences') return
+        const multi = noteMultiByTab[activeTabId]
+        const toArchive =
+          multi?.length > 1 ? multi : selectedNoteId ? [selectedNoteId] : []
+        if (toArchive.length) handleDeleteNotes(toArchive)
         return
       }
 
@@ -1058,7 +1399,8 @@ export default function App() {
     commit,
     undo,
     redo,
-    handleDeleteNote,
+    handleDeleteNotes,
+    noteMultiByTab,
   ])
 
   const handleDeleteTab = (id) => {
@@ -1084,10 +1426,150 @@ export default function App() {
     })
   }
 
+  useEffect(() => {
+    if (!isMobile) return
+    if (selectedNoteId == null) setMobileEditorOpen(false)
+  }, [isMobile, selectedNoteId])
+
+  useEffect(() => {
+    if (!isMobile) return
+    if (activeTabId === 'archive' || activeTabId === 'preferences') {
+      setMobileEditorOpen(false)
+    }
+  }, [isMobile, activeTabId])
+
   if (!libraryHydrated) {
     return (
       <div className="app-window app-loading-screen" aria-busy="true">
         Loading library…
+      </div>
+    )
+  }
+
+  if (isMobile) {
+    return (
+      <div className="app-window app-window--mobile">
+        <Tabs
+          tabs={tabs}
+          activeTabId={activeTabId}
+          onChange={handleSwitchTab}
+          onDeleteTab={handleDeleteTab}
+          onSetTabColor={handleSetTabColor}
+          onShowContextMenu={showContextMenu}
+        />
+
+        <div className="app-body">
+          <Suspense fallback={<div className="app-view-suspense-fallback" />}>
+            <div className="app-mobile">
+              <div
+                className={`app-mobile__main${mobileEditorOpen && selectedNote ? ' app-mobile__main--editor-open' : ''}`}
+              >
+                {activeTabId === 'archive' ? (
+                  <div
+                    key={activeTabId}
+                    className="app-mobile__pane-fade app-mobile__scroll-pane"
+                  >
+                    <ArchiveView
+                      archivedNotes={notesByTab.archive ?? []}
+                      onRestore={handleRestoreFromArchive}
+                      onDeleteForever={handleDeleteArchiveForever}
+                      onDeleteAllForever={handleDeleteArchiveAll}
+                      onRestoreBatch={handleRestoreArchiveBatch}
+                      onDeleteForeverBatch={handleDeleteArchiveForeverBatch}
+                    />
+                  </div>
+                ) : activeTabId === 'preferences' ? (
+                  <div
+                    key={activeTabId}
+                    className="app-mobile__pane-fade app-mobile__scroll-pane app-mobile__scroll-pane--prefs"
+                  >
+                    <MobilePreferencesView
+                      theme={interfaceTheme}
+                      onThemeChange={setInterfaceTheme}
+                      shortcutBindings={shortcutBindings}
+                      onShortcutBindingsChange={setShortcutBindings}
+                      googleClientIdConfigured={Boolean(getGoogleClientId())}
+                      googleSessionActive={googleSessionActive}
+                      driveSyncBusy={driveSyncBusy}
+                      onGoogleConnect={handleGoogleConnect}
+                      onGoogleDisconnect={handleGoogleDisconnect}
+                      onDriveSyncNow={handleDriveSyncNow}
+                      cloudSyncEnabled={cloudSyncEnabled}
+                      onCloudSyncChange={handleCloudSyncChange}
+                      lastSyncLabel={lastSyncLabel}
+                      cloudSyncError={cloudSyncError}
+                      exportBusy={exportBusy}
+                      onExportLibrary={handleExportLibrary}
+                      importBusy={importBusy}
+                      onImportObsidianFiles={handleImportObsidianFiles}
+                    />
+                  </div>
+                ) : (
+                  <>
+                    <div
+                      key={activeTabId}
+                      className="app-mobile__pane-fade app-mobile__notes-pane"
+                    >
+                      <MobileNotesHome
+                        folders={libraryFolders}
+                        visibleNotes={visibleNotes}
+                        selectedFolderIds={selectedFolderIds}
+                        onSelectFolder={(id) => handleSelectFolder(id, undefined)}
+                        onCreateFolderWithName={handleCreateFolderWithName}
+                        onRenameFolder={handleRenameFolder}
+                        onDeleteFolder={handleDeleteFolder}
+                        onShowContextMenu={showContextMenu}
+                        onSelectNote={(id) => {
+                          handleSelectNote(id, undefined)
+                          openMobileEditor()
+                        }}
+                        headerTitle={mobileHeaderTitle}
+                        onUndo={undo}
+                        onAddNote={() => {
+                          handleAddNote()
+                          setTimeout(() => openMobileEditor(), 0)
+                        }}
+                      />
+                    </div>
+                    {mobileEditorOpen && selectedNote && (
+                      <MobileEditorScreen
+                        note={selectedNote}
+                        onBack={() => setMobileEditorOpen(false)}
+                        onChangeTitle={handleChangeTitle}
+                        onChangeBody={handleChangeBody}
+                        onRefresh={handleRefresh}
+                        onAddImage={handleAddImage}
+                        onRemoveImage={handleRemoveImage}
+                      />
+                    )}
+                  </>
+                )}
+              </div>
+              <MobileBottomNav
+                activeId={activeTabId}
+                onNavigate={handleMobileNavigate}
+              />
+            </div>
+          </Suspense>
+        </div>
+
+        <GlobalSearchPalette
+          open={globalSearchOpen}
+          onClose={() => setGlobalSearchOpen(false)}
+          query={notesSearchQuery}
+          onChangeQuery={handleNotesSearchChange}
+          results={globalSearchResults}
+          onPickNote={handleGlobalSearchPick}
+        />
+
+        {contextMenu && (
+          <ContextMenu
+            x={contextMenu.x}
+            y={contextMenu.y}
+            items={contextMenu.items}
+            onClose={closeContextMenu}
+          />
+        )}
       </div>
     )
   }
@@ -1104,70 +1586,75 @@ export default function App() {
       />
 
       <div className="app-body">
-        {activeTabId === 'archive' ? (
-          <ArchiveView
-            archivedNotes={notesByTab.archive ?? []}
-            onRestore={handleRestoreFromArchive}
-            onDeleteForever={handleDeleteArchiveForever}
-            onDeleteAllForever={handleDeleteArchiveAll}
-            onRestoreBatch={handleRestoreArchiveBatch}
-            onDeleteForeverBatch={handleDeleteArchiveForeverBatch}
-          />
-        ) : activeTabId === 'preferences' ? (
-          <PreferencesView
-            theme={interfaceTheme}
-            onThemeChange={setInterfaceTheme}
-            compactSidebar={compactSidebar}
-            onCompactSidebarChange={setCompactSidebar}
-            shortcutBindings={shortcutBindings}
-            onShortcutBindingsChange={setShortcutBindings}
-            googleClientIdConfigured={Boolean(getGoogleClientId())}
-            googleSessionActive={googleSessionActive}
-            driveSyncBusy={driveSyncBusy}
-            onGoogleConnect={handleGoogleConnect}
-            onGoogleDisconnect={handleGoogleDisconnect}
-            onDriveSyncNow={handleDriveSyncNow}
-            cloudSyncEnabled={cloudSyncEnabled}
-            onCloudSyncChange={handleCloudSyncChange}
-            lastSyncLabel={lastSyncLabel}
-            cloudSyncError={cloudSyncError}
-            exportBusy={exportBusy}
-            onExportLibrary={handleExportLibrary}
-            importBusy={importBusy}
-            onImportObsidianFiles={handleImportObsidianFiles}
-          />
-        ) : (
-          <>
-            <NotesWorkspace
-              folders={libraryFolders}
-              notes={notes}
-              visibleNotes={visibleNotes}
-              selectedFolderId={selectedFolderId}
-              onSelectFolder={handleSelectFolder}
-              onCreateFolder={handleCreateFolder}
-              onRenameFolder={handleRenameFolder}
-              onReorderFolders={handleReorderFolders}
-              onDeleteFolder={handleDeleteFolder}
-              searchQuery={notesSearchQuery}
-              onSearchChange={handleNotesSearchChange}
-              notesSearchInputRef={notesSearchInputRef}
-              selectedNoteId={selectedNoteId}
-              onSelectNote={handleSelectNote}
-              onAddNote={handleAddNote}
-              onDeleteNote={handleDeleteNote}
-              onDuplicateNote={handleDuplicateNote}
-              onShowContextMenu={showContextMenu}
+        <Suspense fallback={<div className="app-view-suspense-fallback" />}>
+          {activeTabId === 'archive' ? (
+            <ArchiveView
+              archivedNotes={notesByTab.archive ?? []}
+              onRestore={handleRestoreFromArchive}
+              onDeleteForever={handleDeleteArchiveForever}
+              onDeleteAllForever={handleDeleteArchiveAll}
+              onRestoreBatch={handleRestoreArchiveBatch}
+              onDeleteForeverBatch={handleDeleteArchiveForeverBatch}
             />
-            <Editor
-              note={selectedNote}
-              onChangeTitle={handleChangeTitle}
-              onChangeBody={handleChangeBody}
-              onRefresh={handleRefresh}
-              onAddImage={handleAddImage}
-              onRemoveImage={handleRemoveImage}
+          ) : activeTabId === 'preferences' ? (
+            <PreferencesView
+              theme={interfaceTheme}
+              onThemeChange={setInterfaceTheme}
+              compactSidebar={compactSidebar}
+              onCompactSidebarChange={setCompactSidebar}
+              shortcutBindings={shortcutBindings}
+              onShortcutBindingsChange={setShortcutBindings}
+              googleClientIdConfigured={Boolean(getGoogleClientId())}
+              googleSessionActive={googleSessionActive}
+              driveSyncBusy={driveSyncBusy}
+              onGoogleConnect={handleGoogleConnect}
+              onGoogleDisconnect={handleGoogleDisconnect}
+              onDriveSyncNow={handleDriveSyncNow}
+              cloudSyncEnabled={cloudSyncEnabled}
+              onCloudSyncChange={handleCloudSyncChange}
+              lastSyncLabel={lastSyncLabel}
+              cloudSyncError={cloudSyncError}
+              exportBusy={exportBusy}
+              onExportLibrary={handleExportLibrary}
+              importBusy={importBusy}
+              onImportObsidianFiles={handleImportObsidianFiles}
             />
-          </>
-        )}
+          ) : (
+            <>
+              <NotesWorkspace
+                folders={libraryFolders}
+                notes={notes}
+                visibleNotes={visibleNotes}
+                selectedFolderIds={selectedFolderIds}
+                onSelectFolder={handleSelectFolder}
+                onCreateFolder={handleCreateFolder}
+                onRenameFolder={handleRenameFolder}
+                onReorderFolders={handleReorderFolders}
+                onDeleteFolder={handleDeleteFolder}
+                onAbandonNewFolder={handleAbandonNewFolder}
+                pendingAutoEditFolderId={pendingAutoEditFolderId}
+                onConsumePendingAutoEdit={handleConsumePendingAutoEdit}
+                searchQuery={notesSearchQuery}
+                onSearchChange={handleNotesSearchChange}
+                notesSearchInputRef={notesSearchInputRef}
+                selectedNoteIds={selectedNoteIds}
+                onSelectNote={handleSelectNote}
+                onAddNote={handleAddNote}
+                onDeleteNote={handleDeleteNote}
+                onDuplicateNote={handleDuplicateNote}
+                onShowContextMenu={showContextMenu}
+              />
+              <Editor
+                note={selectedNote}
+                onChangeTitle={handleChangeTitle}
+                onChangeBody={handleChangeBody}
+                onRefresh={handleRefresh}
+                onAddImage={handleAddImage}
+                onRemoveImage={handleRemoveImage}
+              />
+            </>
+          )}
+        </Suspense>
       </div>
 
       <GlobalSearchPalette

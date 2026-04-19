@@ -6,13 +6,16 @@ const FOLDER_DRAG_TYPE = 'application/x-note-folder-id'
 export default function FolderRail({
   folders,
   notes,
-  selectedFolderId,
+  selectedFolderIds,
   onSelectFolder,
   onCreateFolder,
   onRenameFolder,
   onReorderFolders,
   onDeleteFolder,
+  onAbandonNewFolder,
   onShowContextMenu,
+  pendingAutoEditFolderId,
+  onConsumePendingAutoEdit,
 }) {
   const [editingId, setEditingId] = useState(null)
   const [draft, setDraft] = useState('')
@@ -29,6 +32,15 @@ export default function FolderRail({
       editInputRef.current.select()
     }
   }, [editingId])
+
+  useEffect(() => {
+    if (!pendingAutoEditFolderId) return
+    const exists = folders.some((f) => f.id === pendingAutoEditFolderId)
+    if (!exists) return
+    setEditingId(pendingAutoEditFolderId)
+    setDraft('')
+    onConsumePendingAutoEdit?.()
+  }, [pendingAutoEditFolderId, folders, onConsumePendingAutoEdit])
 
   useEffect(
     () => () => {
@@ -49,13 +61,35 @@ export default function FolderRail({
     if (editingId == null) return
     const trimmed = draft.trim()
     const folder = folders.find((f) => f.id === editingId)
-    if (trimmed && folder && trimmed !== folder.label) {
+    if (!folder) {
+      setEditingId(null)
+      return
+    }
+    const isNewUnnamed = folder.label === ''
+    if (isNewUnnamed) {
+      if (!trimmed) {
+        onAbandonNewFolder?.(editingId)
+        setEditingId(null)
+        return
+      }
+      onRenameFolder?.(editingId, trimmed)
+      setEditingId(null)
+      return
+    }
+    if (trimmed && trimmed !== folder.label) {
       onRenameFolder?.(editingId, trimmed)
     }
     setEditingId(null)
   }
 
-  const cancelEdit = () => setEditingId(null)
+  const cancelEdit = () => {
+    if (editingId == null) return
+    const folder = folders.find((f) => f.id === editingId)
+    if (folder?.label === '') {
+      onAbandonNewFolder?.(editingId)
+    }
+    setEditingId(null)
+  }
 
   const handleEditKeyDown = (e) => {
     if (e.key === 'Enter') {
@@ -197,6 +231,8 @@ export default function FolderRail({
     runSettle(dragId)
   }
 
+  const selectedSet = new Set(selectedFolderIds ?? [])
+
   return (
     <aside
       className={`folder-rail${draggingId ? ' folder-rail--drag-active' : ''}`}
@@ -231,7 +267,7 @@ export default function FolderRail({
       >
         {folders.map((folder) => {
           const count = countNotesInFolder(notes, folder.id)
-          const selected = folder.id === selectedFolderId
+          const selected = selectedSet.has(folder.id)
           const isAll = folder.id === ALL_FOLDER_ID
           const editing = editingId === folder.id
           const isDragging = draggingId === folder.id
@@ -259,6 +295,7 @@ export default function FolderRail({
               tabIndex={editing ? -1 : 0}
               draggable={canDrag}
               aria-grabbed={canDrag ? isDragging : undefined}
+              aria-pressed={!editing ? selected : undefined}
               title={
                 canDrag
                   ? 'Drag to reorder — top half inserts above, bottom half below — click to open'
@@ -271,15 +308,16 @@ export default function FolderRail({
               }${isSettled ? ' folder-rail-item--settled' : ''}${
                 canDrag ? ' folder-rail-item--movable' : ''
               }`}
-              onClick={() => {
+              onClick={(e) => {
                 if (editing) return
-                onSelectFolder(folder.id)
+                if (e.altKey) e.preventDefault()
+                onSelectFolder(folder.id, e)
               }}
               onKeyDown={(e) => {
                 if (editing) return
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault()
-                  onSelectFolder(folder.id)
+                  onSelectFolder(folder.id, e)
                 }
               }}
               onDragStart={(e) => handleDragStart(e, folder.id)}
@@ -308,6 +346,7 @@ export default function FolderRail({
                   type="text"
                   className="folder-rail-rename-input"
                   value={draft}
+                  placeholder="Folder name"
                   maxLength={80}
                   aria-label="Folder name"
                   onChange={(e) => setDraft(e.target.value)}
@@ -323,7 +362,7 @@ export default function FolderRail({
                     if (!isAll) beginEdit(folder)
                   }}
                 >
-                  {folder.label}
+                  {folder.label || 'New folder'}
                 </span>
               )}
               <span className="folder-rail-count">{count}</span>

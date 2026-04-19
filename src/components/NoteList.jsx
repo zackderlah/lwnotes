@@ -1,13 +1,14 @@
 export default function NoteList({
   notes,
   emptyHint = 'No notes here yet.',
-  selectedNoteId,
+  selectedNoteIds,
   onSelectNote,
   onAddNote,
   onDeleteNote,
   onDuplicateNote,
   onShowContextMenu,
 }) {
+  const selectedSet = new Set(selectedNoteIds ?? [])
   const handleDeleteClick = (e, note) => {
     e.stopPropagation()
     onDeleteNote(note.id)
@@ -16,7 +17,7 @@ export default function NoteList({
   const handleNoteContextMenu = (e, note) => {
     e.preventDefault()
     e.stopPropagation()
-    onSelectNote(note.id)
+    onSelectNote(note.id, e)
     onShowContextMenu?.({
       x: e.clientX,
       y: e.clientY,
@@ -71,9 +72,12 @@ export default function NoteList({
         <div
           key={note.id}
           className={`note-item${
-            note.id === selectedNoteId ? ' selected' : ''
+            selectedSet.has(note.id) ? ' selected' : ''
           }`}
-          onClick={() => onSelectNote(note.id)}
+          onClick={(e) => {
+            if (e.altKey) e.preventDefault()
+            onSelectNote(note.id, e)
+          }}
           onContextMenu={(e) => handleNoteContextMenu(e, note)}
         >
           <div className="note-meta">
