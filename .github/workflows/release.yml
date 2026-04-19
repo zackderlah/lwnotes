@@ -17,6 +17,10 @@ on:
 permissions:
   contents: write
 
+# Quieter Node 20 deprecation warnings on Actions until upstream actions move to Node 24.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build-win:
     runs-on: windows-latest
@@ -83,7 +87,9 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-      # GitHub sometimes returns HTTP 403 "secondary rate limit" on burst API use; retry with backoff.
+      # Avoid `gh release upload --clobber`: it DELETEs assets first and can 404 if metadata is out of sync.
+      # Instead remove any existing *release* for this tag (the git tag stays), then create once with all files.
+      # Retries help with secondary API rate limits.
       - name: Create release and upload assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -101,9 +107,8 @@ jobs:
           fi
           for attempt in 1 2 3 4 5 6; do
             if gh release view "$TAG" --repo "$REPO" &>/dev/null; then
-              echo "Release $TAG exists; uploading/updating assets..."
-              gh release upload "$TAG" "${FILES[@]}" --repo "$REPO" --clobber
-              exit 0
+              echo "Removing existing GitHub Release $TAG (git tag is unchanged)..."
+              gh release delete "$TAG" --repo "$REPO" --yes
             fi
             if gh release create "$TAG" "${FILES[@]}" --repo "$REPO" --title "$TAG" --generate-notes --verify-tag; then
               exit 0
