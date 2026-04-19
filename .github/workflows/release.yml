@@ -6,6 +6,10 @@
 #   3. Open Actions → workflow run → Release appears with installers under Releases.
 #
 # Code signing (optional): add Windows/macOS signing secrets later; see electron-builder docs.
+#
+# Re-running an old workflow run does NOT use release.yml from main — it uses the file from the
+# commit that triggered that run. After changing this workflow, push a NEW tag (or a new commit’s tag)
+# so GitHub picks up the updated steps; "Re-run failed jobs" alone will keep the old definition.
 
 name: Release
 
@@ -35,7 +39,7 @@ jobs:
         env:
           VITE_GOOGLE_CLIENT_ID: ${{ secrets.VITE_GOOGLE_CLIENT_ID }}
         run: npm run dist:win
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows-installer
           path: release/
@@ -53,7 +57,7 @@ jobs:
         env:
           VITE_GOOGLE_CLIENT_ID: ${{ secrets.VITE_GOOGLE_CLIENT_ID }}
         run: npm run dist:mac
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: mac-installer
           path: release/
@@ -75,7 +79,7 @@ jobs:
         env:
           VITE_GOOGLE_CLIENT_ID: ${{ secrets.VITE_GOOGLE_CLIENT_ID }}
         run: npm run dist:linux
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux-packages
           path: release/
@@ -84,7 +88,7 @@ jobs:
     needs: [build-win, build-mac, build-linux]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
       # Avoid `gh release upload --clobber`: it DELETEs assets first and can 404 if metadata is out of sync.
